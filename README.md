@@ -7,7 +7,7 @@ Command execution example
 =========================
 
 Next example shows how to reflect streams from 10.1.1.12 host to
-10.8.80.14 host::
+10.8.80.14 host:
 
  /usr/local/bin/ssrr  -L /var/log/ssrr/ssrr.log -i  10.1.1.12 -d 10.9.80.14
 
@@ -15,9 +15,7 @@ Next example shows how to reflect streams from 10.1.1.12 host to
 Logrotate rule example
 ======================
 
-::
-
-  /var/log/ssrr/*.log {
+/var/log/ssrr/*.log {
   daily
   missingok
   rotate 52
@@ -32,6 +30,6 @@ Logrotate rule example
       kill -HUP $i
     done
   endscript
-  }
+}
 
 
