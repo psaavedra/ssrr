@@ -182,8 +182,6 @@ def exit_program():
             message ("exit_program",  m, "INFO", None, None)
             v.stop = True
 
-        m = str(FFMPEG_THREADS.items())
-        message ("exit_program",  m, "INFO", None, None)
         for k,v in FFMPEG_THREADS.items():
             m = "joining " + v.name
             message ("exit_program",  m, "INFO", None, None)
