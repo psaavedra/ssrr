@@ -1,0 +1,291 @@
+#!/usr/bin/python
+
+
+import simplejson
+import httplib
+import time
+import subprocess
+import signal
+import os
+import sys
+from threading import Thread
+from optparse import OptionParser
+
+from datetime import datetime
+
+### Global vars #####################################################
+
+RUN = True
+
+REFRESH_TIME = 10
+ERLYVIDEO_IP = '10.14.10.102'
+ERLYVIDEO_PORT = 8082
+ERLYVIDEO_IP_DEST = '176.9.180.144'
+ERLYVIDEO_RTMP_PORT_DEST = 1935
+
+FFMPEG_THREADS = {}
+STREAMS = {}
+
+LOG_FILE = "/dev/stdout"
+LOG_FILE_FD = None
+
+LOG_SEVERITIES = \
+    ["emerg", "alert", "crit", "err", "warning", "notice", "info", "debug"]
+VERBOSITY_LEVEL = LOG_SEVERITIES[6]
+
+
+### Global vars #####################################################
+
+
+def message(module, mess, severity=LOG_SEVERITIES[6], identifier=None, peer=None):
+  global VERBOSITY_LEVEL
+  global LOG_SEVERITIES
+
+  i_s = 6
+  try:
+      i_s = LOG_SEVERITIES.index(severity)
+  except ValueError:
+      pass
+  i_l = LOG_SEVERITIES.index(VERBOSITY_LEVEL)
+
+  if i_s <= i_l:
+    res = "[%s]" % str(datetime.utcfromtimestamp(float(time.time())).isoformat())
+
+    if severity:
+      res = res + " [%s]" % str(severity).upper()
+    else:
+      res = res + " [-]"
+
+    res = res + " [%s]" % str(module)
+
+    if peer:
+      res = res + " [%s]" % str(peer)
+    else:
+      try:
+        if request.header.get('X-Real-IP'):
+          res = res + " [%s]" % str( request.header.get('X-Real-IP') )
+        else:
+          res = res + " [%s]" % str(request.environ["REMOTE_ADDR"])
+      except:
+        res = res + " [-]"
+
+    if identifier:
+      res = res + " [%s]" % str(identifier)
+    else:
+      res = res + " [-]"
+
+    res = res + " " + str(mess)
+
+    LOG_FILE_FD.write(res + "\n")
+    LOG_FILE_FD.flush()
+
+
+
+class ffmpegRunner(Thread):
+
+    def __init__ (self,name):
+        Thread.__init__(self)
+
+        self.name = name
+        self.stop = False
+
+
+    def run (self):
+      m = "starting ffmpeg thread for %s stream" \
+                % (self.name)
+      message("run", m, "INFO", None, None)
+
+      while not self.stop:
+
+        cmd = '''ffmpeg  -async 2 -i http://%s:%s/stream/%s
+-acodec libfaac -ar 44100  -ab 64k
+-vcodec copy
+-f flv rtmp://%s:%s/rtmp/%s ''' \
+        % (ERLYVIDEO_IP, ERLYVIDEO_PORT, self.name, ERLYVIDEO_IP_DEST,
+           ERLYVIDEO_RTMP_PORT_DEST, self.name)
+
+        p = subprocess.Popen(cmd.split(), shell=False, bufsize=1024,
+                stdin=subprocess.PIPE, stdout=open('/dev/null', 'w'),
+                stderr=open('/dev/null', 'w'), close_fds=True)
+
+        m = "launched ffmpeg for %s stream (%s)" \
+                % (self.name,str(p.pid))
+        message("run", m, "INFO", None, None)
+
+        # s1 = True
+        # while (s1):
+        #     if self.stop:
+        #         # print "stopped"
+        #         os.kill(p.pid,9)
+        #         s1 = False
+
+        #     p.stderr.read(200)
+        #     # print "running ffmpeg for %s stream (%s)" \
+        #     #   % (self.name,str(p.pid))
+
+        p.wait()
+        m = "ending ffmpeg for %s stream (%s)" % (self.name,str(p.pid))
+        message("run", m, "INFO", None, None)
+        time.sleep (2)
+
+      m = "stopped ffmpeg for %s stream (%s)" % (self.name,str(p.pid))
+      message("run", m, "INFO", None, None)
+
+
+def exist_remote_stream_name(stream_name):
+    for s in STREAMS:
+        if s["name"] == stream_name:
+            return True
+    return False
+
+
+def get_remote_streams_available (ip, port):
+    conn = httplib.HTTPConnection(ip, port)
+    conn.request("GET", "/erlyvideo/api/streams")
+    r1 = conn.getresponse()
+
+    # >>> print r1.status, r1.reason
+    # 200 OK
+
+    rules = simplejson.load(r1 )
+    return rules["streams"]
+
+
+# for s in streams:
+#     print s["name"]
+def signal_hup_handler(signal, frame):
+    global LOG_FILE_FD
+    print 'Reloading ... '
+    m = "Signal number %s detected. Reloading recorder" % str(signal)
+    message ("signal_hup_handler",  m, "INFO", None, None)
+
+    n = LOG_FILE_FD.name
+
+    try:
+      LOG_FILE_FD.close()
+      LOG_FILE_FD = open(ops.logfile, "a+b")
+    except Exception, e:
+      # print "Can not open %s file: %s" % (n, str(e))
+      sys.exit (-1)
+
+def exit_program():
+    global FFMPEG_THREADS
+    if len (FFMPEG_THREADS) > 0:
+        print 'Stopping threads ... '
+        m =  "Stopping threads ..."
+        message ("exit_program",  m, "INFO", None, None)
+        for k,v in FFMPEG_THREADS.items():
+            m = "killing " + v.name
+            message ("exit_program",  m, "INFO", None, None)
+            v.stop = True
+
+        for k,v in FFMPEG_THREADS.items():
+            m = "joining " + v.name
+            message ("exit_program",  m, "INFO", None, None)
+            v.join()
+            FFMPEG_THREADS.pop(k)
+
+    sys.exit(0)
+
+def signal_int_handler(signal, frame):
+    RUN = False
+    m = "Keyboard interrupt: program ending"
+    message ("signal_int_handler",  m, "INFO", None, None)
+    exit_program()
+
+
+signal.signal(signal.SIGINT, signal_int_handler)
+signal.signal(signal.SIGHUP, signal_hup_handler)
+signal.signal(signal.SIGTERM, signal_int_handler)
+
+
+UDP_SOURCE=False
+
+### End Global vars
+
+
+################################################################################
+
+
+parser = OptionParser()
+
+parser.add_option("-w", "--workdir", dest="workdir", default=".",
+        help="Work directory (default: .)", metavar="WORKDIR")
+
+parser.add_option("-U", "--uri", dest="uri",
+        help="Source URI/URL (default: http://localhost:8082)",
+        default="http://localhost:8082")
+
+parser.add_option("-i", "--sourceip",
+        dest="sourceip", default=ERLYVIDEO_IP,
+        help="Source IP (default: %s)" % ERLYVIDEO_IP)
+
+parser.add_option("-p", "--sourceport",
+        dest="sourceport", default=ERLYVIDEO_PORT,
+        help="Source port (default: %s)" % ERLYVIDEO_PORT)
+
+parser.add_option("-d", "--destinationip",
+        dest="destinationip", default=ERLYVIDEO_IP_DEST,
+        help="Destination IP (default: %s)" % ERLYVIDEO_IP_DEST)
+
+parser.add_option("-z", "--destinationport",
+        dest="destinationport", default=ERLYVIDEO_RTMP_PORT_DEST,
+        help="Destination port (default: %s)" % ERLYVIDEO_RTMP_PORT_DEST)
+
+parser.add_option("-r", "--refreshtime",
+        dest="refreshtime", default=REFRESH_TIME,
+        help="Refresh time (default: %s)" % REFRESH_TIME)
+
+parser.add_option("-L", "--logfile",
+        dest="logfile", default=LOG_FILE,
+        help="Log file (default: %s)" % LOG_FILE)
+
+
+
+(ops, args) = parser.parse_args()
+
+ERLYVIDEO_IP = ops.sourceip
+ERLYVIDEO_PORT = int(ops.sourceport)
+ERLYVIDEO_IP_DEST = ops.destinationip
+ERLYVIDEO_RTMP_PORT_DEST = int(ops.destinationport)
+REFRESH_TIME = int(ops.refreshtime)
+
+
+try:
+    LOG_FILE_FD = open(ops.logfile, "a+b")
+except Exception, e:
+    m = "Can not open %s file: %s" % (ops.logfile, str(e))
+    message("main", m, "INFO", None, None)
+    sys.exit (-1)
+
+while RUN:
+    STREAMS = get_remote_streams_available(ERLYVIDEO_IP,ERLYVIDEO_PORT)
+    m = FFMPEG_THREADS.keys()
+    message("main", m, "INFO", None, None)
+
+
+    for s in STREAMS:
+        _name = s["name"]
+
+        if not FFMPEG_THREADS.has_key(_name):
+            m = "starting " + str(_name)
+            message ("main",  m, "INFO", None, None)
+            t = ffmpegRunner(_name)
+            t.start()
+            FFMPEG_THREADS[_name] = t
+
+
+
+    for f in FFMPEG_THREADS.keys():
+        p = FFMPEG_THREADS[f]
+
+        if not exist_remote_stream_name(f):
+            m = "killing " + str(f)
+            message ("main",  m, "INFO", None, None)
+            p.stop = True
+            m = "joining " + str(f)
+            message ("main",  m, "INFO", None, None)
+            p.join()
+            FFMPEG_THREADS.pop(f)
+
+    time.sleep (REFRESH_TIME)
