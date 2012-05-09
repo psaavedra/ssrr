@@ -18,9 +18,9 @@ from datetime import datetime
 RUN = True
 
 REFRESH_TIME = 10
-ERLYVIDEO_IP = '10.14.10.102'
+ERLYVIDEO_IP = '127.0.0.1'
 ERLYVIDEO_PORT = 8082
-ERLYVIDEO_IP_DEST = '176.9.180.144'
+ERLYVIDEO_IP_DEST = '127.0.0.2'
 ERLYVIDEO_RTMP_PORT_DEST = 1935
 
 FFMPEG_THREADS = {}
@@ -88,6 +88,7 @@ class ffmpegRunner(Thread):
 
         self.name = name
         self.stop = False
+        self.ffmpeg = None
 
 
     def run (self):
@@ -104,9 +105,11 @@ class ffmpegRunner(Thread):
         % (ERLYVIDEO_IP, ERLYVIDEO_PORT, self.name, ERLYVIDEO_IP_DEST,
            ERLYVIDEO_RTMP_PORT_DEST, self.name)
 
-        p = subprocess.Popen(cmd.split(), shell=False, bufsize=1024,
+        self.ffmpeg = subprocess.Popen(cmd.split(), shell=False, bufsize=1024,
                 stdin=subprocess.PIPE, stdout=open('/dev/null', 'w'),
                 stderr=open('/dev/null', 'w'), close_fds=True)
+
+        p = self.ffmpeg
 
         m = "launched ffmpeg for %s stream (%s)" \
                 % (self.name,str(p.pid))
@@ -179,9 +182,13 @@ def exit_program():
             message ("exit_program",  m, "INFO", None, None)
             v.stop = True
 
+        m = str(FFMPEG_THREADS.items())
+        message ("exit_program",  m, "INFO", None, None)
         for k,v in FFMPEG_THREADS.items():
             m = "joining " + v.name
             message ("exit_program",  m, "INFO", None, None)
+            if v.ffmpeg:
+              v.ffmpeg.kill()
             v.join()
             FFMPEG_THREADS.pop(k)
 
