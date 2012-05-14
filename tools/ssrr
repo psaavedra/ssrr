@@ -288,6 +288,7 @@ while RUN:
             m = "killing " + str(f)
             message ("main",  m, "INFO", None, None)
             p.stop = True
+            p.ffmpeg.kill()
             m = "joining " + str(f)
             message ("main",  m, "INFO", None, None)
             p.join()
