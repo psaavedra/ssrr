@@ -288,10 +288,14 @@ while RUN:
             m = "killing " + str(f)
             message ("main",  m, "INFO", None, None)
             p.stop = True
-            p.ffmpeg.kill()
+
+            try:
+              p.ffmpeg.kill()
+            except Exception:
+              pass
+
             m = "joining " + str(f)
             message ("main",  m, "INFO", None, None)
-            p.join()
             FFMPEG_THREADS.pop(f)
 
     time.sleep (REFRESH_TIME)
