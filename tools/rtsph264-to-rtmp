@@ -1,0 +1,178 @@
+#!/usr/bin/env python
+
+from prctl import set_name
+
+set_name("rtph264-to-rtmp")
+
+
+import sys, os
+import time
+
+
+
+ALSA_DEVICE="hw:0"
+AUDIOCONVERT="audio/x-raw-int,rate=44100,channels=2"
+
+
+RTMPSINK_LOCATION = "rtmp://10.14.10.102:1935/rtmp/output live=output"
+FILESINK_LOCATION = "output.flv"
+
+
+RTSPSRC_LOCATION = "rtsp://10.121.55.85/media/video1"
+
+RECORD_TIME = 72000
+
+from optparse import OptionParser
+
+parser = OptionParser()
+parser.add_option("-u", "--rtspuri", dest="RTSPSRC_LOCATION",
+                  help="RTSP source (" + str(RTSPSRC_LOCATION) + ")",
+                  default=RTSPSRC_LOCATION)
+
+parser.add_option("-A", "--alsadevice", dest="ALSA_DEVICE",
+                  help="Alsa device (" + str(ALSA_DEVICE) + ")",
+                  default=ALSA_DEVICE)
+parser.add_option("-a", "--audioconvert", dest="AUDIOCONVERT",
+                  help="audioconvert filter (" + str(AUDIOCONVERT) + ")",
+                  default=AUDIOCONVERT)
+
+parser.add_option("-f", "--filename", dest="FILESINK_LOCATION",
+                  help="filename (" + str(FILESINK_LOCATION) + ")",
+                  default=FILESINK_LOCATION)
+parser.add_option("-l", "--livestream", dest="RTMPSINK_LOCATION",
+                  help="livestream (" + str(RTMPSINK_LOCATION) + ")",
+                  default=RTMPSINK_LOCATION)
+
+parser.add_option("-r", "--recordtime", dest="RECORD_TIME",
+                  help="Time recording (" + str(RECORD_TIME) + ")",
+                  default=RECORD_TIME)
+
+
+
+
+(ops, args) = parser.parse_args()
+
+
+
+# import pygst
+# pygst.require("0.10")
+
+import gobject
+gobject.threads_init()
+import gst
+
+# gst.debug_set_active(True)
+# gst.debug_set_default_threshold(4)
+
+# http://wiki.oz9aec.net/index.php/Gstreamer_cheat_sheet
+
+def on_pad_added(pad, islast):
+    # print "linking!"
+    rtspsrc = pad
+    player = rtspsrc.get_parent()
+    rtph264depay = player.get_by_name('rtph264depay')
+    try:
+      print "linked!"
+      rtspsrc.link(rtph264depay)
+    except Exception, e:
+        print e
+        pass
+
+player = gst.Pipeline("player")
+
+
+rtspsrc = gst.element_factory_make("rtspsrc", "rtspsrc")
+rtspsrc.set_property("location", ops.RTSPSRC_LOCATION)
+rtspsrc.set_property("latency", 100)
+rtspsrc.connect("pad-added", on_pad_added)
+
+
+
+
+rtph264depay = gst.element_factory_make("rtph264depay", "rtph264depay")
+rtph264depay.set_property("byte-stream", False)
+
+
+
+
+alsasrc = gst.element_factory_make("alsasrc", "alsasrc")
+alsasrc.set_property("device", ops.ALSA_DEVICE)
+audioconvert = gst.element_factory_make("audioconvert", "audioconvert")
+audioconvert_filter = gst.element_factory_make("capsfilter", "audioconvert_filter")
+audioconvert_filter.set_property('caps',
+    gst.caps_from_string(ops.AUDIOCONVERT))
+
+
+
+
+ffenc_aac = gst.element_factory_make("ffenc_aac", "ffenc_aac")
+
+
+
+
+filesink_q = gst.element_factory_make("queue", "filesink_q")
+rtmpsink_q = gst.element_factory_make("queue", "rtmpsink_q")
+rtmpsink_q.set_property("leaky", True)
+
+
+
+
+
+flvmux = gst.element_factory_make("flvmux", "flvmux")
+tee = gst.element_factory_make("tee", "tee")
+
+
+
+
+
+rtmpsink  = gst.element_factory_make("rtmpsink", "rtmpsink")
+rtmpsink.set_property("location", ops.RTMPSINK_LOCATION)
+
+
+
+
+filesink = gst.element_factory_make("filesink", "filesink")
+filesink.set_property("location",ops.FILESINK_LOCATION)
+
+
+
+
+
+
+player.add(rtspsrc, rtph264depay)
+player.add(alsasrc, audioconvert, audioconvert_filter, ffenc_aac)
+player.add(flvmux, tee, rtmpsink, filesink, filesink_q, rtmpsink_q)
+
+
+gst.element_link_many(alsasrc, audioconvert, audioconvert_filter, ffenc_aac,
+        flvmux)
+
+gst.element_link_many(rtph264depay, flvmux)
+
+flvmux.link(tee)
+
+tee.link(filesink_q)
+tee.link(rtmpsink_q)
+tee.set_state(gst.STATE_PLAYING)
+
+filesink_q.link(filesink)
+rtmpsink_q.link(rtmpsink)
+
+
+print "Playing"
+player.set_state(gst.STATE_PLAYING)
+
+# import gobject
+# 
+# loop = gobject.MainLoop()
+# context = loop.get_context()
+# 
+# while 1:
+#     # Handle commands here
+#     context.iteration(True)
+
+
+# print "Stopped"
+# player.set_state(gst.STATE_NULL)
+
+time.sleep(int(ops.RECORD_TIME))
