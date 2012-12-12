@@ -18,13 +18,18 @@ from datetime import datetime
 RUN = True
 
 REFRESH_TIME = 10
-ERLYVIDEO_IP = '127.0.0.1'
-ERLYVIDEO_PORT = 8082
+FISRT_START_TIME = 15
+STALLED_TIME = 300
+ERLYVIDEO_IP_SRC = '127.0.0.1'
 ERLYVIDEO_IP_DEST = '127.0.0.2'
+ERLYVIDEO_HTTP_PORT_SRC = 8082
+ERLYVIDEO_HTTP_PORT_DEST = 8082
+ERLYVIDEO_RTMP_PORT_SRC =  1935
 ERLYVIDEO_RTMP_PORT_DEST = 1935
 
 FFMPEG_THREADS = {}
-STREAMS = {}
+STREAMS_SRC = {}
+STREAMS_DEST = {}
 
 LOG_FILE = "/dev/stdout"
 LOG_FILE_FD = None
@@ -88,22 +93,35 @@ class ffmpegRunner(Thread):
 
         self.name = name
         self.stop = False
+        self.first_start_option = True
         self.ffmpeg = None
+        self.starttime = 0
 
 
     def run (self):
       m = "starting ffmpeg thread for %s stream" \
                 % (self.name)
       message("run", m, "INFO", None, None)
-
+      p = None
       while not self.stop:
-
+        self.starttime = time.time()
+      
         cmd = '''ffmpeg  -async 2 -i http://%s:%s/stream/%s
--acodec libfaac -ar 44100  -ab 64k
--vcodec copy
--f flv rtmp://%s:%s/rtmp/%s ''' \
-        % (ERLYVIDEO_IP, ERLYVIDEO_PORT, self.name, ERLYVIDEO_IP_DEST,
-           ERLYVIDEO_RTMP_PORT_DEST, self.name)
+              -acodec aac  -strict experimental  -ar 44100  -ab 64k
+              -vcodec copy
+              -f flv rtmp://%s:%s/rtmp/%s '''
+        cmd = cmd % (ERLYVIDEO_IP_SRC, ERLYVIDEO_HTTP_PORT_SRC, self.name, ERLYVIDEO_IP_DEST,
+            ERLYVIDEO_RTMP_PORT_DEST, self.name)
+
+        if self.first_start_option:
+            m = "first start option selected for %s stream" \
+                % (self.name)
+            message("run", m, "INFO", None, None)
+ 
+            cmd = '''ffmpeg -i rtmp://%s:%s/live/%s  -vcodec copy
+              -acodec copy -f flv rtmp://%s:%s/rtmp/%s'''
+            cmd = cmd % (ERLYVIDEO_IP_SRC, ERLYVIDEO_RTMP_PORT_SRC, self.name, ERLYVIDEO_IP_DEST,
+               ERLYVIDEO_RTMP_PORT_DEST, self.name)
 
         self.ffmpeg = subprocess.Popen(cmd.split(), shell=False, bufsize=1024,
                 stdin=subprocess.PIPE, stdout=open('/dev/null', 'w'),
@@ -135,14 +153,51 @@ class ffmpegRunner(Thread):
       message("run", m, "INFO", None, None)
 
 
-def exist_remote_stream_name(stream_name):
-    for s in STREAMS:
+def exist_dest_stream_name(stream_name):
+    global STREAMS_DEST
+    for s in STREAMS_DEST:
         if s["name"] == stream_name:
             return True
     return False
 
 
-def get_remote_streams_available (ip, port):
+def exist_src_stream_name(stream_name):
+    global STREAMS_SRC
+    for s in STREAMS_SRC:
+        if s["name"] == stream_name:
+            return True
+    return False
+
+def kill_ffmpeg_thread_by_name(name):
+    global FFMPEG_THREADS
+
+    p = FFMPEG_THREADS[name]
+    m = "kill_ffmpeg_thread_by_name " + str(name)
+    message ("",  m, "INFO", None, None)
+    try:
+        p.ffmpeg.kill()
+    except Exception:
+        pass
+
+def stop_thread_by_name(name):
+    global FFMPEG_THREADS
+
+    p = FFMPEG_THREADS[name]
+    m = "killing " + str(name)
+    message ("stop_thread_by_name",  m, "INFO", None, None)
+    p.stop = True
+
+    try:
+        p.ffmpeg.kill()
+    except Exception:
+        pass
+
+    m = "joining " + str(name)
+    message ("main",  m, "INFO", None, None)
+    FFMPEG_THREADS.pop(name)
+
+
+def get_streams_available (ip, port):
     conn = httplib.HTTPConnection(ip, port)
     conn.request("GET", "/erlyvideo/api/streams")
     r1 = conn.getresponse()
@@ -152,6 +207,16 @@ def get_remote_streams_available (ip, port):
 
     rules = simplejson.load(r1 )
     return rules["streams"]
+
+
+def refresh_streams_dest_availables(ERLYVIDEO_IP,ERLYVIDEO_HTTP_PORT):
+    global STREAMS_DEST
+    STREAMS_DEST = get_streams_available(ERLYVIDEO_IP,ERLYVIDEO_HTTP_PORT)
+
+
+def refresh_streams_src_availables(ERLYVIDEO_IP,ERLYVIDEO_HTTP_PORT):
+    global STREAMS_SRC
+    STREAMS_SRC = get_streams_available(ERLYVIDEO_IP,ERLYVIDEO_HTTP_PORT)
 
 
 # for s in streams:
@@ -222,24 +287,37 @@ parser.add_option("-U", "--uri", dest="uri",
         default="http://localhost:8082")
 
 parser.add_option("-i", "--sourceip",
-        dest="sourceip", default=ERLYVIDEO_IP,
-        help="Source IP (default: %s)" % ERLYVIDEO_IP)
-
-parser.add_option("-p", "--sourceport",
-        dest="sourceport", default=ERLYVIDEO_PORT,
-        help="Source port (default: %s)" % ERLYVIDEO_PORT)
+        dest="sourceip", default=ERLYVIDEO_IP_SRC,
+        help="Source IP (default: %s)" % ERLYVIDEO_IP_SRC)
 
 parser.add_option("-d", "--destinationip",
         dest="destinationip", default=ERLYVIDEO_IP_DEST,
         help="Destination IP (default: %s)" % ERLYVIDEO_IP_DEST)
 
-parser.add_option("-z", "--destinationport",
-        dest="destinationport", default=ERLYVIDEO_RTMP_PORT_DEST,
-        help="Destination port (default: %s)" % ERLYVIDEO_RTMP_PORT_DEST)
+parser.add_option("--sourcehttpport",
+        dest="sourcehttpport", default=ERLYVIDEO_HTTP_PORT_SRC,
+        help="Source HTTP port (default: %s)" % ERLYVIDEO_HTTP_PORT_SRC)
+
+parser.add_option("--sourcertmpport",
+        dest="sourcertmpport", default=ERLYVIDEO_RTMP_PORT_SRC,
+        help="Source RTMP port (default: %s)" % ERLYVIDEO_RTMP_PORT_SRC)
+
+parser.add_option("--destinationhttpport",
+        dest="destinationhttpport", default=ERLYVIDEO_HTTP_PORT_DEST,
+        help="Destination HTTP port (default: %s)" % ERLYVIDEO_HTTP_PORT_DEST)
+
+parser.add_option("--destinationrtmpport",
+        dest="destinationrtmpport", default=ERLYVIDEO_RTMP_PORT_DEST,
+        help="Destination RTMP port (default: %s)" % ERLYVIDEO_RTMP_PORT_DEST)
 
 parser.add_option("-r", "--refreshtime",
         dest="refreshtime", default=REFRESH_TIME,
         help="Refresh time (default: %s)" % REFRESH_TIME)
+
+parser.add_option("--stalledtime",
+        dest="stalledtime", default=STALLED_TIME,
+        help="Stalled time allowed (default: %s)" % STALLED_TIME)
+
 
 parser.add_option("-L", "--logfile",
         dest="logfile", default=LOG_FILE,
@@ -249,11 +327,14 @@ parser.add_option("-L", "--logfile",
 
 (ops, args) = parser.parse_args()
 
-ERLYVIDEO_IP = ops.sourceip
-ERLYVIDEO_PORT = int(ops.sourceport)
+ERLYVIDEO_IP_SRC = ops.sourceip
 ERLYVIDEO_IP_DEST = ops.destinationip
-ERLYVIDEO_RTMP_PORT_DEST = int(ops.destinationport)
+ERLYVIDEO_HTTP_PORT_SRC = int(ops.sourcehttpport)
+ERLYVIDEO_HTTP_PORT_DEST = int(ops.destinationhttpport)
+ERLYVIDEO_RTMP_PORT_SRC = int(ops.sourcertmpport)
+ERLYVIDEO_RTMP_PORT_DEST = int(ops.destinationrtmpport)
 REFRESH_TIME = int(ops.refreshtime)
+STALLED_TIME = int(ops.stalledtime)
 
 
 try:
@@ -264,12 +345,12 @@ except Exception, e:
     sys.exit (-1)
 
 while RUN:
-    STREAMS = get_remote_streams_available(ERLYVIDEO_IP,ERLYVIDEO_PORT)
-    m = FFMPEG_THREADS.keys()
+    m = "current threads: " + repr(FFMPEG_THREADS.keys())
     message("main", m, "INFO", None, None)
 
 
-    for s in STREAMS:
+    refresh_streams_src_availables(ERLYVIDEO_IP_SRC,ERLYVIDEO_HTTP_PORT_SRC)
+    for s in STREAMS_SRC:
         _name = s["name"]
 
         if not FFMPEG_THREADS.has_key(_name):
@@ -280,22 +361,33 @@ while RUN:
             FFMPEG_THREADS[_name] = t
 
 
+    time.sleep (REFRESH_TIME)
 
+    refresh_streams_dest_availables(ERLYVIDEO_IP_DEST,ERLYVIDEO_HTTP_PORT_DEST)
     for f in FFMPEG_THREADS.keys():
         p = FFMPEG_THREADS[f]
 
-        if not exist_remote_stream_name(f):
-            m = "killing " + str(f)
-            message ("main",  m, "INFO", None, None)
-            p.stop = True
+        if not exist_src_stream_name(f):
+            stop_thread_by_name(f)
+        else:
+            if not exist_dest_stream_name(f) \
+            and p.first_start_option and (time.time() - p.starttime > FISRT_START_TIME):
+                # First attemp (without audio transcoding) is not OK
+                m = "first attempt in thread for " + str(f) + " has failed"
+                p.first_start_option = False
+                message ("main",  m, "INFO", None, None)
+                kill_ffmpeg_thread_by_name(f)
 
-            try:
-              p.ffmpeg.kill()
-            except Exception:
-              pass
+            if not exist_dest_stream_name(f) \
+            and (time.time() - p.starttime > STALLED_TIME):
+                # In this case, for some reason, ffmpeg proccess are not
+                # pushing stream to the dest erlyvideo. 
+                # We will kill it to prevent ffmpeg in a stalled status.
+                m = "thread for " + str(f) + " has reached a stalled state"
+                message ("main",  m, "INFO", None, None)
+                stop_thread_by_name (f)
 
-            m = "joining " + str(f)
-            message ("main",  m, "INFO", None, None)
-            FFMPEG_THREADS.pop(f)
 
-    time.sleep (REFRESH_TIME)
+
+
+
