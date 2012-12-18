@@ -198,16 +198,18 @@ def stop_thread_by_name(name):
 
 
 def get_streams_available (ip, port):
-    conn = httplib.HTTPConnection(ip, port)
-    conn.request("GET", "/erlyvideo/api/streams")
-    r1 = conn.getresponse()
+    try:
+        conn = httplib.HTTPConnection(ip, port, timeout=10)
+        conn.request("GET", "/erlyvideo/api/streams")
+        r1 = conn.getresponse()
 
-    # >>> print r1.status, r1.reason
-    # 200 OK
+        # >>> print r1.status, r1.reason
+        # 200 OK
 
-    rules = simplejson.load(r1 )
-    return rules["streams"]
-
+        rules = simplejson.load(r1 )
+        return rules["streams"]
+    except Exception:
+        return []
 
 def refresh_streams_dest_availables(ERLYVIDEO_IP,ERLYVIDEO_HTTP_PORT):
     global STREAMS_DEST
